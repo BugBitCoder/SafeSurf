@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import {
   verhoeffValid, verhoeffCheckDigit, luhnValid, ibanValid, shannonEntropy, looksLikeSecret,
 } from '../../extension/shared/pii-checksums.js';
+import { looksPersonal, scanAndRedact } from '../../extension/shared/pii-deterministic.js';
 
 test('verhoeff: accepts a real Aadhaar, rejects a broken check digit', () => {
   assert.equal(verhoeffValid('999999990019'), true);
@@ -73,4 +74,29 @@ test('looksLikeSecret: fires on tokens, not on words', () => {
   assert.equal(looksLikeSecret('short'), false);
   assert.equal(looksLikeSecret('aaaaaaaaaaaaaaaa'), false, 'low entropy');
   assert.equal(looksLikeSecret('abcdefghijklmnopqrst'), false, 'no digits');
+});
+test('looksPersonal: survives how people actually spell an Aadhaar', () => {
+  // Regression. The free-text hint list only knew "aadhaar", so the common
+  // misspellings missed entirely — and `personal` is what gates the
+  // model-assisted rewrite in the service worker. A miss here means the model
+  // pass is skipped, the free-text PII goes out untouched, and the pill
+  // reports "nothing to redact" while the user is looking at their own ID.
+  for (const spelling of ['aadhaar', 'aadhar', 'adhaar', 'adhar', 'uidai']) {
+    assert.equal(looksPersonal(`my ${spelling} numbered 123456789012`), true, spelling);
+    assert.equal(looksPersonal(`our ${spelling} is 9999 9999 0019`), true, spelling);
+  }
+});
+
+test('a failed checksum is not a false positive, and does not hide the risk', () => {
+  // The checksum gate must keep rejecting 123456789012 — it is not a real
+  // Aadhaar, and flagging every 12-digit number is how a redaction tool
+  // trains people to ignore it.
+  const bogus = scanAndRedact('find my aadhar numbered 123456789012');
+  assert.deepEqual(bogus.byCategory, {}, 'a checksum-invalid number is not a finding');
+
+  // ...but the text around it still reads as personal, so the model pass runs.
+  assert.equal(bogus.personal, true);
+
+  // The real number, correctly spelled or not, is still caught deterministically.
+  assert.deepEqual(scanAndRedact('my aadhar is 9999 9999 0019').byCategory, { aadhaar: 1 });
 });

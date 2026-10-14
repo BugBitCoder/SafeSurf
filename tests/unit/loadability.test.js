@@ -73,6 +73,109 @@ test('content scripts parse as classic scripts', () => {
     `these content scripts failed to parse:\n${broken.map((b) => `  ${b.file}\n    ${b.error}`).join('\n')}`);
 });
 
+test('the content script never intercepts a typing event', () => {
+  // Regression, and the cause of "SafeSurf won't let me finish typing".
+  //
+  // `beforeinput` fires on EVERY keystroke. The original listener ran the full
+  // analysis on it and called preventDefault(), so after three characters the
+  // user physically could not type.
+  for (const file of CONTENT_SCRIPTS) {
+    const source = readFileSync(file, 'utf8');
+    assert.doesNotMatch(source, /addEventListener\(\s*['"]beforeinput['"]/,
+      `${relative(REPO, file)} must not listen to beforeinput`);
+    assert.doesNotMatch(source, /addEventListener\(\s*['"](?:keypress|keyup)['"]/,
+      `${relative(REPO, file)} must not intercept non-submit key events`);
+  }
+
+  // Observing `input` is required for the live typing pill. What is forbidden
+  // is consuming the event — a passive observer must never cancel it.
+  const source = readFileSync(join(EXTENSION_DIR, 'content/content.js'), 'utf8');
+  assert.match(source, /addEventListener\(\s*['"]input['"]\s*,\s*onInputObserved/,
+    'the live typing scan needs an input observer');
+
+  const body = source.slice(source.indexOf('function onInputObserved'));
+  const observer = body.slice(0, body.indexOf('\n  }'));
+  assert.doesNotMatch(observer, /preventDefault|stopImmediatePropagation|stopPropagation/,
+    'onInputObserved must be purely observational');
+});
+
+test('the live pill cannot spin the SPA watcher into an infinite loop', () => {
+  // Regression, and the cause of "nothing pops up when I type" — with the tab
+  // frozen solid.
+  //
+  // The SPA watcher observes documentElement with subtree:true, and the status
+  // pill is appended to documentElement. It called renderStatus() on EVERY
+  // callback, so painting the pill re-triggered the watcher, which painted the
+  // pill again, forever. The main thread never yielded to the compositor, so
+  // the first paint never reached the screen. Verified in headless Chrome:
+  // the page never finished loading.
+  const content = readFileSync(join(EXTENSION_DIR, 'content/content.js'), 'utf8');
+
+  assert.match(content, /function anchorSignature/, 'no way to tell whether the composer moved');
+  assert.match(content, /new MutationObserver\(/, 'the SPA watcher is gone entirely');
+
+  const watcher = content.slice(content.indexOf('new MutationObserver('));
+  assert.match(watcher, /anchorSignature\(el\)\s*===\s*anchoredTo/,
+    'the watcher must skip the repaint when the composer has not moved');
+  assert.match(watcher, /renderStatus\(/,
+    'the watcher should still re-anchor on a real move');
+
+  // A re-anchor must repaint the same pill, not a stripped-down one.
+  assert.match(content, /lastStatus\s*=\s*\{\s*res,\s*onClick\s*\}/,
+    'the pill lost its click handler when re-anchored');
+
+  // Defence in depth: the renderer itself must be idempotent, so that no
+  // future caller can reintroduce the loop through a different path.
+  const overlay = readFileSync(join(EXTENSION_DIR, 'content/overlay-ui.js'), 'utf8');
+  assert.match(overlay, /__ssSig/,
+    'showStatus repaints unconditionally; writing to the observed subtree must be a no-op when nothing changed');
+});
+
+test('submit interception is gated on Enter and a composer', () => {
+  const source = readFileSync(join(EXTENSION_DIR, 'content/content.js'), 'utf8');
+
+  // The gate must exist and must be consulted before any preventDefault.
+  assert.match(source, /function isSubmitIntent/, 'missing isSubmitIntent predicate');
+  assert.match(source, /function isComposerElement/, 'missing isComposerElement predicate');
+
+  const gate = source.indexOf('if (!isSubmitIntent(event)) return;');
+  const block = source.indexOf('submitEvent.preventDefault?.();');
+  assert.ok(gate > -1, 'isSubmitIntent is never consulted');
+  assert.ok(block > -1, 'preventDefault call site not found');
+  assert.ok(gate < block, 'preventDefault must be gated behind isSubmitIntent');
+
+  const composerGate = source.indexOf('!isComposerElement(el)');
+  assert.ok(composerGate > -1 && composerGate < block,
+    'preventDefault must also be gated behind isComposerElement');
+});
+
+test('the overlay injects its own stylesheet', () => {
+  // Regression: the .ss-* rules lived in a CSS constant that nothing ever
+  // injected, and overlay.css only styles the host element. The panel
+  // rendered completely unstyled in production.
+  const source = readFileSync(join(EXTENSION_DIR, 'content/overlay-ui.js'), 'utf8');
+  assert.match(source, /safesurf-overlay-style/, 'overlay stylesheet is never injected');
+  assert.match(source, /style\.textContent\s*=\s*CSS/, 'CSS constant is never applied');
+  assert.match(source, /createElement\(['"]style['"]\)/);
+});
+
+test('extension-context invalidation is reported as actionable', () => {
+  // Regression: reloading the extension tears down the context that an
+  // already-injected content script is bound to. The raw platform message
+  // ("Extension context invalidated.") is not something a user can act on, and
+  // it is the single most common thing they will hit during development.
+  const source = readFileSync(join(EXTENSION_DIR, 'content/content.js'), 'utf8');
+
+  assert.match(source, /function isContextInvalidated/);
+  assert.match(source, /Extension context invalidated/);
+  assert.match(source, /Receiving end does not exist/, 'must also catch the port-closed variant');
+  assert.match(source, /Refresh this page/i, 'the user must be told how to recover');
+
+  // The chrome.storage listener must be guarded, or an uncaught throw aborts
+  // the rest of the boot sequence on every re-injection.
+  assert.match(source, /try\s*\{[^}]*chrome\.storage\?\.onChanged\.addListener/s);
+});
+
 test('the service worker and every lib module actually import cleanly', async () => {
   // The real check. Import each module with the chrome.* mock in place so the
   // module body can execute without throwing on a missing API.

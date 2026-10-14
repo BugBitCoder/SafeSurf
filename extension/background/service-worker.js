@@ -55,6 +55,12 @@ async function saveMap(map) {
 /**
  * Full analysis of a prompt the user is about to send.
  *
+ * `passive: true` runs the deterministic layers ONLY — no model call at all.
+ * That is what makes live-as-you-type feedback viable: it costs single-digit
+ * milliseconds, so it can run on every typing pause without being felt.
+ * The model-assisted work (rephrase, injection confirmation) still happens on
+ * the actual submit.
+ *
  * Order is the security property, not an implementation detail:
  *   1. deterministic PII (model-free, checksum-gated)
  *   2. deterministic injection triage (model-free)
@@ -63,24 +69,42 @@ async function saveMap(map) {
  * The model never sees a checksum-valid identifier, so the product stays
  * safe even if gemma4:e4b decides to comply instead of redacting.
  */
-async function analysePrompt({ text, pageChunks = [], doInjectionScan = true }) {
+async function analysePrompt({ text, pageChunks = [], doInjectionScan = true, passive = false }) {
   const settings = await getSettings();
   if (!settings.enabled) {
-    return { blocked: false, reason: 'disabled', text, redacted: text, findings: [] };
+    return { blocked: false, reason: 'disabled', text, redacted: text, rewritten: text, findings: [], passive };
   }
 
   // 1 — deterministic
   const { redacted: deterministicText, findings, byCategory, personal } = scanAndRedact(text);
   const map = await getMap();
-  findings.forEach((f) => map.set(f.replacement, f.original, f.category));
-  await saveMap(map);
+  if (!passive) {
+    // Only persist plaintext to the session map when the user actually sends.
+    // A passive scan runs on every typing pause and must not accumulate
+    // half-typed secrets.
+    findings.forEach((f) => map.set(f.replacement, f.original, f.category));
+    await saveMap(map);
+  }
 
   // 2 — deterministic injection triage on the page
   let injection = null;
   if (doInjectionScan && settings.injectionScan && pageChunks.length) {
     const quick = triage(pageChunks);
     if (quick.suspicious) {
-      injection = await injectionScan(pageChunks);
+      // Escalating to the model costs seconds. Defer that to the real submit.
+      injection = passive ? null : await injectionScan(pageChunks);
+      if (!injection) {
+        injection = {
+          is_injection: true,
+          confidence: quick.score,
+          instructions: quick.hits.map((h) => ({
+            payload: h.excerpt, category: h.category, target: h.origin ?? '', hidden: h.hidden, source: 'deterministic',
+          })),
+          summary: 'Detected while typing — full confirmation runs on send.',
+          deterministic: quick,
+          modelRan: false,
+        };
+      }
     } else {
       // Report an explicit clean verdict rather than null, so the caller can
       // tell "scanned, found nothing" apart from "not scanned".
@@ -93,14 +117,14 @@ async function analysePrompt({ text, pageChunks = [], doInjectionScan = true }) 
         modelRan: false,
       };
     }
-    if (injection?.is_injection) await threat.recordInjectionFinding(injection.instructions.length);
+    if (injection?.is_injection && !passive) await threat.recordInjectionFinding(injection.instructions.length);
   }
 
   // 3 — model rephrase, on the already-redacted text, and ONLY when there is
   // a reason to believe free-text PII is present. Skipping the round trip for
   // obviously-clean prompts is what makes a clean prompt pass through
   // instantly; a ~6s model call on every keystroke would be unusable.
-  const needsModel = settings.rephrase && (findings.length > 0 || personal);
+  const needsModel = !passive && settings.rephrase && (findings.length > 0 || personal);
   let rewritten = deterministicText;
   let degraded = false;
   let degradedReason;
@@ -122,7 +146,7 @@ async function analysePrompt({ text, pageChunks = [], doInjectionScan = true }) 
   }
 
   const highSeverity = findings.filter((f) => f.severity === 'high');
-  if (highSeverity.length) await threat.recordCredentialShapedPrompt(highSeverity.length);
+  if (highSeverity.length && !passive) await threat.recordCredentialShapedPrompt(highSeverity.length);
 
   const blocking = highSeverity.length > 0 || Boolean(injection?.is_injection);
 
@@ -137,6 +161,8 @@ async function analysePrompt({ text, pageChunks = [], doInjectionScan = true }) 
     findings,
     byCategory,
     injection,
+    personal,
+    passive,
     modelRan: needsModel && !degraded,
   };
 }

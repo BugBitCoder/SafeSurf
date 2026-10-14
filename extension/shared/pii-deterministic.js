@@ -244,7 +244,12 @@ const FREE_TEXT_HINTS = [
   /\b(?:i|we)\s+(?:am|are)\s+(?:a|an)\s+[A-Z][a-z]+/,
   /\b(?:my|our)\s+(?:employer|company|manager|school|university|college|department|salary|ctc|designation)\b/i,
   /\b(?:diagnos(?:is|ed)|prescription|medication|symptoms?|patient|hospital|clinic|discharge summary)\b/i,
-  /\b(?:my|our)\s+(?:bank|account|iban|passport|voter id|licence|license|aadhaar|pan|ssn|nin)\b/i,
+  // Spelling-tolerant on purpose: aadhaar / aadhar / adhar / adhaar are how
+  // people actually type it. This matters more than it looks — `personal` is
+  // what gates the model-assisted rewrite in the service worker, so a missed
+  // spelling silently skips the only layer that catches free-text PII, and the
+  // user ships it while the pill confidently reports nothing to redact.
+  /\b(?:my|our)\s+(?:bank|account|iban|passport|voter id|voter|licence|license|a{1,2}dha{1,2}r|uidai|pan|ssn|nin)\b/i,
   /\b\d{1,4}\s+[A-Za-z]+\s+(?:road|rd|street|st|avenue|ave|lane|nagar|apartments?|colony|block|sector)\b/i,
   /\b(?:dear|hi|hello)\s+[A-Z][a-z]+,?\s+(?:my|i)\b/i,
   /@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/,

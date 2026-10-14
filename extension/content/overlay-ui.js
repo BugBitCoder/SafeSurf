@@ -79,12 +79,31 @@
     .ss-img-wrap img { max-width:100%; border-radius:9px; border:1px solid #22304a; display:block; }
   `;
 
+  let styleInjected = false;
+
   function ensureRoot() {
     let root = document.getElementById(HOST_ID);
     if (root) return root;
+
     root = document.createElement('div');
     root.id = HOST_ID;
     root.className = 'ss-root';
+
+    // Inject our own stylesheet.
+    //
+    // content_scripts[].css (overlay.css) only styles the HOST element — it
+    // cannot reach into a subtree Chrome did not create, and shipping every
+    // .ss-* rule there would leak them into the page's own cascade. Keeping
+    // the rules in JS and scoping them to this root is both correct and the
+    // reason the panel is self-contained.
+    if (!styleInjected) {
+      const style = document.createElement('style');
+      style.id = 'safesurf-overlay-style';
+      style.textContent = CSS;
+      (document.head ?? document.documentElement).appendChild(style);
+      styleInjected = true;
+    }
+
     document.documentElement.appendChild(root);
     return root;
   }
@@ -102,6 +121,11 @@
   ));
 
   const api = {
+    isOpen() {
+      const root = document.getElementById(HOST_ID);
+      return Boolean(root && root.innerHTML.trim().length > 0);
+    },
+
     /** Which findings deserve chip highlighting. */
     tokenChips(byCategory = {}) {
       return Object.entries(byCategory)
@@ -110,7 +134,7 @@
     },
 
     /** The main interception dialog. */
-    showPromptReview({ original, rewritten, byCategory, findings, injection, degraded, degradedReason, blocked }, callbacks = {}) {
+    showPromptReview({ original, rewritten, byCategory, findings, injection, degraded, degradedReason, blocked, upgrading, isTypingPause }, callbacks = {}) {
       const highCount = (findings ?? []).filter((f) => f.severity === 'high').length;
 
       const banner = injection?.is_injection
@@ -121,17 +145,34 @@
         ? `<div class="ss-alert warn"><strong>Local model did not confirm a safe rewrite.</strong>${degradedReason ? ` (${esc(degradedReason)})` : ''}<br>The text below is deterministic redaction only. Review it before sending.</div>`
         : '';
 
+      // Shown when the panel was painted from the live typing scan and the
+      // model-assisted rewrite has not landed yet. Blocking "Send redacted"
+      // here matters — otherwise the user sends the deterministic-only text
+      // believing free-text PII was handled.
+      const upgradingBanner = upgrading
+        ? `<div class="ss-alert warn ss-upgrade"><strong>Refining locally…</strong> the local model is still rewriting free-text details. Hold on a moment for the strongest redaction.</div>`
+        : '';
+
+      const subTitle = isTypingPause
+        ? 'Detected after typing stopped · Sensitive information will not be sent to the web'
+        : `${highCount} high-severity finding(s) · processed entirely on this device`;
+
+      const titleText = isTypingPause
+        ? 'SafeSurf detected sensitive information'
+        : (blocked ? 'SafeSurf blocked this prompt' : 'SafeSurf review');
+
       const html = `
         <div class="ss-head">
           <div class="ss-title"><i class="ss-dot ${highCount ? 'high' : 'ok'}"></i>
-            ${blocked ? 'SafeSurf blocked this prompt' : 'SafeSurf review'}
+            ${titleText}
           </div>
-          <div class="ss-sub">${highCount} high-severity finding(s) · processed entirely on this device</div>
+          <div class="ss-sub">${subTitle}</div>
         </div>
 
         <div class="ss-body">
           ${banner}
           ${degradedBanner}
+          ${upgradingBanner}
 
           <div>
             <div class="ss-section-title">What you typed</div>
@@ -150,16 +191,30 @@
         </div>
 
         <div class="ss-foot">
-          <button class="ss-btn primary" data-act="send">Send redacted</button>
-          <button class="ss-btn" data-act="original">Send original anyway</button>
+          <button class="ss-btn primary" data-act="apply">Replace with redacted</button>
+          ${upgrading ? '' : '<button class="ss-btn" data-act="send">Send redacted</button>'}
+          <button class="ss-btn" data-act="original">Keep original</button>
           <span class="ss-spacer"></span>
-          <button class="ss-btn" data-act="cancel">Cancel</button>
+          <button class="ss-btn" data-act="cancel">Dismiss</button>
         </div>`;
 
       const root = mount(html);
-      root.querySelector('[data-act="send"]').onclick = () => { api.close(); callbacks.onSend?.(rewritten); };
+      const applyBtn = root.querySelector('[data-act="apply"]');
+      if (applyBtn) applyBtn.onclick = () => { api.close(); callbacks.onApply?.(rewritten); };
+      const sendBtn = root.querySelector('[data-act="send"]');
+      if (sendBtn) sendBtn.onclick = () => { api.close(); callbacks.onSend?.(rewritten); };
       root.querySelector('[data-act="original"]').onclick = () => { api.close(); callbacks.onSendOriginal?.(original); };
       root.querySelector('[data-act="cancel"]').onclick = () => { api.close(); callbacks.onCancel?.(); };
+
+      const onEscape = (e) => {
+        if (e.key === 'Escape') {
+          window.removeEventListener('keydown', onEscape, true);
+          api.close();
+          callbacks.onCancel?.();
+        }
+      };
+      window.addEventListener('keydown', onEscape, true);
+
       return root;
     },
 
@@ -209,8 +264,10 @@
     },
 
     showToast(message, tone = 'ok', ms = 4200) {
-      const root = ensureRoot();
-      let el = root.querySelector('.ss-toast');
+      // Look the existing toast up document-wide. It is appended to
+      // <html>, not inside the overlay root, so a root-scoped query always
+      // missed and every call stacked another element on the page forever.
+      let el = document.querySelector('.ss-toast');
       if (!el) {
         el = document.createElement('div');
         el.className = 'ss-toast';
@@ -232,9 +289,97 @@
       el.__t = setTimeout(() => { el.style.opacity = '0'; }, ms);
     },
 
+    /**
+     * Live status pill, anchored next to the composer.
+     *
+     * This is the whole point of passive scanning: the user learns what will be
+     * redacted the moment they stop typing, not after they have already
+     * pressed Enter and committed.
+     *
+     * @param {{text:string, tone:'ok'|'warn'|'danger'|'busy', detail?:string}|null} state
+     * @param {DOMRect} [anchor] composer rect, for placement
+     * @param {(() => void)|null} [onClick] optional click callback to open full review
+     */
+    showStatus(state, anchor, onClick) {
+      let el = document.getElementById(HOST_ID + '-status');
+      if (!state) {
+        el?.remove();
+        return null;
+      }
+
+      if (!el) {
+        el = document.createElement('div');
+        el.id = HOST_ID + '-status';
+        el.className = 'ss-status';
+        document.documentElement.appendChild(el);
+      }
+
+      const colour = {
+        ok: '#3ddc84', warn: '#ffb03b', danger: '#ff6b6a', busy: '#7fb0ff',
+      }[state.tone] ?? '#7fb0ff';
+
+      const isInteractive = typeof onClick === 'function';
+
+      // Position ABOVE the composer, floating nicely and always visible
+      let bottomPx = 90;
+      let leftPx = 24;
+
+      if (anchor && anchor.width > 0 && anchor.height > 0) {
+        // Place 10px above the top edge of the composer
+        const distFromBottom = window.innerHeight - anchor.top + 10;
+        bottomPx = Math.max(20, Math.min(window.innerHeight - 60, distFromBottom));
+        leftPx = Math.max(16, Math.min(window.innerWidth - 320, anchor.left));
+      } else {
+        bottomPx = 90;
+        leftPx = 24;
+      }
+
+      const actionText = isInteractive && (state.tone === 'warn' || state.tone === 'danger')
+        ? `<span style="margin-left:6px;padding:2px 8px;border-radius:6px;background:${colour}25;border:1px solid ${colour}60;font-size:11px;font-weight:600;color:${colour};">Review & Redact</span>`
+        : '';
+
+      const html = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${colour};box-shadow:0 0 10px ${colour};flex-shrink:0;"></span><span style="font-weight:500;">${esc(state.text)}</span>${actionText}`;
+
+      const css = [
+        'all: initial', 'position: fixed', 'z-index: 2147483647',
+        `border: 1px solid ${colour}55`, `background: #0f1626f2`,
+        `box-shadow: 0 8px 30px rgba(0,0,0,.6)`,
+        'border-radius: 99px', 'padding: 8px 16px',
+        'font: 13px ui-sans-serif, -apple-system, system-ui, sans-serif',
+        'color: #e8f1ff', 'display: flex', 'align-items: center', 'gap: 9px',
+        isInteractive ? 'pointer-events: auto; cursor: pointer;' : 'pointer-events: none;',
+        'transition: opacity .16s ease, bottom .16s ease',
+        `left: ${Math.round(leftPx)}px`,
+        `bottom: ${Math.round(bottomPx)}px`,
+      ].join(';');
+
+      // Idempotent by construction. This element is a child of <html>, which
+      // the content script's SPA watcher observes with subtree:true — so an
+      // unconditional write here can re-trigger that watcher forever and lock
+      // the page. Repainting only when something actually changed makes the
+      // whole class of re-entrancy bug impossible.
+      const sig = `${html}|${css}|${isInteractive}`;
+      if (el.__ssSig === sig) return el;
+      el.__ssSig = sig;
+
+      el.style.cssText = css;
+      el.innerHTML = html;
+
+      el.onclick = isInteractive ? (e) => { e.stopPropagation(); onClick(); } : null;
+
+      return el;
+    },
+
+    hideStatus() {
+      document.getElementById(HOST_ID + '-status')?.remove();
+    },
+
     close() {
       const root = document.getElementById(HOST_ID);
       if (root) root.innerHTML = '';
+      // The toast lives outside the root, so it needs clearing separately.
+      const toast = document.querySelector('.ss-toast');
+      if (toast) { clearTimeout(toast.__t); toast.remove(); }
     },
 
     CSS,
