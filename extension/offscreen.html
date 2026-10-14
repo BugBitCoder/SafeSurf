@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SafeSurf offscreen</title>
+</head>
+<body>
+  <!--
+    Offscreen document exists solely to reach the clipboard.
+
+    navigator.clipboard is unavailable in MV3 service workers (crbug 1160302)
+    and unusable in offscreen documents because the Clipboard API requires
+    document focus (crbug 1404835). execCommand('paste') with the
+    clipboardRead permission is the only path that works.
+  -->
+  <textarea id="scratch" autofocus></textarea>
+  <script src="offscreen.js"></script>
+</body>
+</html>

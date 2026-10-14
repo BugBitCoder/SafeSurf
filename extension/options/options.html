@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SafeSurf</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main class="wrap">
+    <header class="head">
+      <div class="brand">
+        <span class="logo" aria-hidden="true"></span>
+        <div>
+          <h1>SafeSurf</h1>
+          <p class="tag">You get the AI's help. The AI never gets your secrets.</p>
+        </div>
+      </div>
+      <div id="health" class="health" role="status">checking local model…</div>
+    </header>
+
+    <section class="card">
+      <h2>Local model</h2>
+      <dl class="kv" id="healthDetail"></dl>
+      <p class="note">
+        Everything runs against <code>gemma4:e4b</code> on <code>localhost:11434</code>.
+        If the model is unreachable, SafeSurf blocks the prompt rather than letting it
+        through uninspected.
+      </p>
+    </section>
+
+    <section class="card">
+      <h2>Protection</h2>
+      <div id="toggles" class="toggles"></div>
+    </section>
+
+    <section class="card">
+      <h2>Threat score</h2>
+      <div id="score" class="score">—</div>
+      <button id="refreshScore" class="ghost" type="button">Recalculate</button>
+    </section>
+
+    <section class="card">
+      <h2>Egress</h2>
+      <p class="note">
+        SafeSurf refuses any network request whose origin is not
+        <code>http://localhost:11434</code>. This is enforced in
+        <code>background/egress-guard.js</code> and verified by a test that scans the
+        source tree for remote URL literals.
+      </p>
+      <pre id="egress" class="pre">running check…</pre>
+    </section>
+  </main>
+
+  <script type="module" src="options.js"></script>
+</body>
+</html>

@@ -1,0 +1,42 @@
+# Node
+node_modules/
+npm-debug.log*
+.npm/
+
+# Vendored tesseract.js (~15 MB, regenerated with `npm run vendor:tesseract`).
+# MV3 forbids remotely hosted code, so these MUST be vendored — but they are
+# build artefacts, not source, and every teammate fetches them once.
+extension/assets/tesseract/*
+!extension/assets/tesseract/.gitkeep
+!extension/assets/tesseract/README.md
+
+# Landing build output
+landing/dist/
+landing/.vite/
+
+# Extension packaging artefacts
+*.zip
+*.crx
+*.pem
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Never commit a local .env or a captured key
+.env
+.env.*
+*.key
+*.pem
+
+.gemini
+.impeccable
+.codex
+.agent
+.opencode
+.agents

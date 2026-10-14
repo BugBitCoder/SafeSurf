@@ -1,0 +1,25 @@
+{
+  "name": "safesurf",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-first prompt redaction. Gemma 4 on-device via Ollama — nothing leaves your machine.",
+  "license": "Apache-2.0",
+  "workspaces": ["landing"],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node tests/unit/index.js",
+    "test:unit": "node tests/unit/index.js",
+    "test:golden": "node tests/golden/run.js",
+    "test:golden:v": "node tests/golden/run.js --verbose",
+    "test:integration": "node tests/integration/pipeline.mjs",
+    "test:all": "npm run test:unit && npm run test:golden && npm run test:integration",
+    "verify": "node scripts/verify-env.js",
+    "icons": "node scripts/make-icons.js",
+    "landing:dev": "npm --workspace landing run dev",
+    "landing:build": "npm --workspace landing run build",
+    "vendor:tesseract": "node scripts/vendor-tesseract.js"
+  }
+}

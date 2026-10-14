@@ -1,0 +1,43 @@
+/*
+ * Content-script CSS.
+ *
+ * Everything visual is `all: initial`-scoped inside the overlay root and
+ * styled inline by overlay-ui.js, so this file only needs to establish the
+ * host element and guarantee it is never hidden by a page's own rules.
+ */
+
+#safesurf-overlay-root {
+  all: initial;
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  line-height: 1.5;
+  color-scheme: dark;
+  /* A hostile page must not be able to hide our interceptor. */
+  visibility: visible !important;
+  opacity: 1 !important;
+  pointer-events: auto;
+}
+
+#safesurf-overlay-root:empty {
+  pointer-events: none;
+}
+
+#safesurf-overlay-root * {
+  box-sizing: border-box;
+}
+
+/*
+ * Respect the OS-level reduced-motion setting. The overlay must never be the
+ * thing that makes someone feel ill.
+ */
+@media (prefers-reduced-motion: reduce) {
+  #safesurf-overlay-root *,
+  #safesurf-overlay-root *::before,
+  #safesurf-overlay-root *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

@@ -1,0 +1,152 @@
+{
+  "_comment": [
+    "Golden set for the deterministic PII layer.",
+    "Every detector needs at least one POSITIVE (a real-format value that must be caught)",
+    "and at least one NEAR-MISS NEGATIVE (the same shape with a broken checksum, which is",
+    "where false positives actually hide).",
+    "Generate valid check digits with: node -e \"import('./extension/shared/pii-checksums.js').then(m=>console.log(m.verhoeffCheckDigit('99999999001')))\""
+  ],
+  "cases": [
+    {
+      "id": "aadhaar-plain",
+      "expect": ["aadhaar"],
+      "text": "my aadhaar number is 999999990019 please verify"
+    },
+    {
+      "id": "aadhaar-spaced",
+      "expect": ["aadhaar"],
+      "text": "Aadhaar: 9999 9999 0019"
+    },
+    {
+      "id": "aadhaar-hyphenated",
+      "expect": ["aadhaar"],
+      "text": "id 9999-9999-0019 ok"
+    },
+    {
+      "id": "aadhaar-near-miss-checksum",
+      "expectNot": ["aadhaar"],
+      "text": "order number 999999990018 should not be treated as an aadhaar"
+    },
+    {
+      "id": "aadhaar-leading-zero",
+      "expectNot": ["aadhaar"],
+      "text": "phone 0123456789 and ref 111111111111"
+    },
+
+    {
+      "id": "pan-valid-shape",
+      "expect": ["pan"],
+      "text": "PAN on the form is ABCPE1234F"
+    },
+    {
+      "id": "pan-lowercase-not-matched",
+      "expectNot": ["pan"],
+      "text": "the word abcpe1234f in lowercase is not a PAN"
+    },
+
+    {
+      "id": "card-visa",
+      "expect": ["card"],
+      "text": "pay with 4539 5787 6362 1486"
+    },
+    {
+      "id": "card-amex",
+      "expect": ["card"],
+      "text": "card 378282246310005"
+    },
+    {
+      "id": "card-mastercard",
+      "expect": ["card"],
+      "text": "5105105105105100"
+    },
+    {
+      "id": "card-near-miss-luhn",
+      "expectNot": ["card"],
+      "text": "reference 4539 5787 6362 1481 is not a real card"
+    },
+
+    {
+      "id": "iban-valid",
+      "expect": ["iban"],
+      "text": "transfer to GB82 WEST 1234 5698 7654 32 please"
+    },
+    {
+      "id": "iban-wrong-checksum",
+      "expectNot": ["iban"],
+      "text": "IBAN GB82WEST12345698765433 is malformed"
+    },
+
+    {
+      "id": "email",
+      "expect": ["email"],
+      "text": "reach me at priya.sharma@corp.example.com"
+    },
+    {
+      "id": "email-in-subject",
+      "expect": ["email"],
+      "text": "RE: invoice from accounts@vendor.example.org"
+    },
+
+    {
+      "id": "phone-in",
+      "expect": ["phone_in"],
+      "text": "call me on +91 98765 43210 tomorrow"
+    },
+    {
+      "id": "phone-in-spaced",
+      "expect": ["phone_in"],
+      "text": "98765 43210 is my number"
+    },
+
+    {
+      "id": "aws-access-key",
+      "expect": ["aws_access_key"],
+      "text": "key AKIAIOSFODNN7EXAMPLE leaked"
+    },
+    {
+      "id": "github-token",
+      "expect": ["github_token"],
+      "text": "token ghp_16CharsOfStuff0000000000000000abcd"
+    },
+    {
+      "id": "jwt",
+      "expect": ["jwt"],
+      "text": "auth eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+    },
+    {
+      "id": "ssn",
+      "expect": ["us_ssn"],
+      "text": "ssn 123-45-6789 on file"
+    },
+
+    {
+      "id": "multi-category",
+      "expect": ["aadhaar", "pan", "card", "email"],
+      "text": "Aadhaar 999999990019, PAN ABCPE1234F, card 4539578763621486, mail a@b.com"
+    },
+
+    {
+      "id": "clean-prompt",
+      "expect": [],
+      "text": "Write a short poem about the sea at dusk. Keep it under 40 words."
+    },
+
+    {
+      "id": "prose-with-numbers",
+      "expectNot": ["aadhaar", "card", "iban"],
+      "text": "In 2023 the company had 4500 employees across 12 offices and revenue of 1234 million."
+    },
+
+    {
+      "id": "high-entropy-token",
+      "expect": ["secret"],
+      "text": "here is the value aG9sZCdFRkxPUl9hdVRoVG9rZW5f9x2Kq take it"
+    },
+
+    {
+      "id": "no-false-positive-on-normal-text",
+      "expect": [],
+      "text": "Please explain how internationalization works in modern browsers and why it matters."
+    }
+  ]
+}
